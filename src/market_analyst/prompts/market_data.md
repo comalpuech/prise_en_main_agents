@@ -10,7 +10,8 @@ aucun chiffre. L'exécution se termine après cet appel.
 
 Les SMA courte et longue portent sur 5 et 20 séances. `weekly_return_pct`
 désigne le rendement en pourcentage de la période calendaire demandée, même
-si elle diffère de 7 jours. La volatilité annualisée est une fraction (0,3 = 30 %).
+si elle diffère de 7 jours : première à dernière clôture disponible dans la période.
+La volatilité annualisée est en pourcentage (30 signifie 30 %), sur 252 séances/an.
 Les clôtures sont ajustées des opérations sur titres et dividendes ; la séance
 en cours est exclue. Un champ absent indique un historique insuffisant.
 Un résultat vide indique l'absence de données exploitables ; ne le complète pas.

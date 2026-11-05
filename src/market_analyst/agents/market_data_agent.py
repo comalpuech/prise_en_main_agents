@@ -1,11 +1,13 @@
 """Agent 2 — analyse des cours (moyennes, volatilité)."""
 
 import logging
+import os
 from functools import cache
 from pathlib import Path
 
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph.state import CompiledStateGraph
 
 from market_analyst.config import get_settings
@@ -20,8 +22,17 @@ PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "market_data.md"
 @cache
 def build_market_data_agent() -> CompiledStateGraph:
     """Agent LangChain utilisant le même fournisseur/modèle que l'Agent 1."""
+    if get_settings().llm_model.startswith("google_genai:") and not os.getenv(
+        "GOOGLE_API_KEY"
+    ):
+        raise ValueError("GOOGLE_API_KEY absente : renseignez-la dans votre .env local")
+    model = get_llm()
+    if isinstance(model, ChatGoogleGenerativeAI):
+        # Instance propre à cet agent ; la fabrique et les autres agents restent inchangés.
+        model.timeout = 30
+        model.max_retries = 1
     return create_agent(
-        get_llm(),
+        model,
         tools=[get_market_metrics],
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
         name="market_data_agent",
@@ -42,9 +53,17 @@ def market_data_agent(state: AnalystState) -> AnalystState:
         f"Ticker : {ticker}\nPériode : {days} derniers jours calendaires\n"
         "Appelle get_market_metrics avec exactement ce ticker et cette période."
     )
-    result = build_market_data_agent().invoke(
-        {"messages": [HumanMessage(task)]}, config={"recursion_limit": 10}
-    )
+    agent = build_market_data_agent()
+    try:
+        result = agent.invoke(
+            {"messages": [HumanMessage(task)]}, config={"recursion_limit": 10}
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Échec de l'appel LLM de l'Agent 2. Vérifiez la connexion, les quotas "
+            "et GOOGLE_MODEL (modèle indisponible : choisir un modèle accessible "
+            "dans le .env local). La cause d'origine est conservée."
+        ) from exc
     # L'artefact est produit par Python, jamais par le texte final du LLM.
     for message in reversed(result["messages"]):
         if not isinstance(message, ToolMessage) or message.name != "get_market_metrics":

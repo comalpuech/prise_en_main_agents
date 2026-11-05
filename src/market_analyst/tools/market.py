@@ -18,10 +18,10 @@ def collect_market_metrics(
 ) -> MarketMetrics:
     """Indicateurs sur clôtures ajustées, hors séance en cours.
 
-    Le rendement va de la dernière clôture à ou avant le début de la fenêtre
-    calendaire à la dernière clôture disponible. Les SMA utilisent 5/20 séances,
+    Le rendement va de la première à la dernière clôture dans la fenêtre
+    calendaire. Les SMA utilisent 5/20 séances,
     même pour une fenêtre courte. La volatilité utilise les rendements de la
-    fenêtre, l'écart-type échantillonnal et 252 séances/an (365 pour XXX-USD).
+    fenêtre, l'écart-type échantillonnal et 252 séances/an, en pourcentage.
     Un indicateur non calculable est absent, jamais remplacé par zéro ou NaN.
     """
     if not ticker.strip() or lookback_days <= 0:
@@ -44,11 +44,24 @@ def collect_market_metrics(
     except Exception:
         logger.warning("Historique indisponible pour %s", ticker, exc_info=True)
         return {}
-    if history.empty or "Close" not in history:
+    if history is None or history.empty:
         logger.warning("Aucune clôture pour %s", ticker)
         return {}
 
-    close = pd.to_numeric(history["Close"], errors="coerce").copy()
+    # Ticker.history donne normalement des colonnes simples ; accepte aussi
+    # les formats (Price, Ticker) et (Ticker, Price) de Yahoo/download.
+    if isinstance(history.columns, pd.MultiIndex):
+        columns = [
+            column
+            for column in history.columns
+            if "Close" in column and ticker in column
+        ]
+    else:
+        columns = [column for column in history.columns if column == "Close"]
+    if len(columns) != 1:
+        logger.warning("Colonne Close absente ou ambiguë pour %s", ticker)
+        return {}
+    close = pd.to_numeric(history[columns[0]], errors="coerce").astype(float).copy()
     # Conserve la date de séance locale, sans décaler les marchés vers UTC.
     close.index = pd.DatetimeIndex(close.index).tz_localize(None).normalize()
     close = close.sort_index()
@@ -61,19 +74,19 @@ def collect_market_metrics(
         return {}
 
     metrics = MarketMetrics(last_close=float(valid.iloc[-1]))
-    baseline = valid.loc[valid.index <= cutoff]
-    if not baseline.empty and baseline.index[-1] < valid.index[-1]:
+    period = close.loc[close.index >= cutoff]
+    period_valid = period.dropna()
+    if len(period_valid) >= 2:
         metrics["weekly_return_pct"] = float(
-            (valid.iloc[-1] / baseline.iloc[-1] - 1) * 100
+            (period_valid.iloc[-1] / period_valid.iloc[0] - 1) * 100
         )
     for window, key in ((5, "sma_short"), (20, "sma_long")):
         value = close.rolling(window).mean().iloc[-1]
         if pd.notna(value):
             metrics[key] = float(value)
-    returns = close.pct_change(fill_method=None).loc[close.index > cutoff].dropna()
+    returns = period.pct_change(fill_method=None).dropna()
     if len(returns) >= 2:
-        sessions = 365 if ticker.endswith("-USD") else 252
-        metrics["volatility_annualized"] = float(returns.std(ddof=1) * sqrt(sessions))
+        metrics["volatility_annualized"] = float(returns.std(ddof=1) * sqrt(252) * 100)
     return {key: value for key, value in metrics.items() if isfinite(value)}
 
 
