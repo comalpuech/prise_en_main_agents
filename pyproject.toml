@@ -12,6 +12,7 @@ dependencies = [
     "langgraph>=1.2.20",
     "pydantic-settings>=2.16.2",
     "python-dotenv>=1.2.4",
+    "yfinance>=1.8.0",
 ]
 
 [project.scripts]
