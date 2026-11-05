@@ -9,7 +9,7 @@ hebdomadaire sur une action ou une crypto à partir de vraies données.
 
 Tâche cible : « Fais-moi un point sur Nvidia cette semaine ».
 
-> État : scaffolding uniquement, pas encore d'implémentation.
+> État : Agent 1 (veille d'actualités) implémenté ; agents 2 et 3 et câblage du graphe à faire.
 
 ## Installation
 
