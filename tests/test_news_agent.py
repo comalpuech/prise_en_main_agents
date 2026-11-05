@@ -169,7 +169,12 @@ def test_fetch_yahoo_news_keeps_only_articles_about_the_asset(monkeypatch):
 
         def get_news(self, count):
             return [
-                payload("About NVDA", ["NVDA"], clickThroughUrl="https://y/c"),
+                payload(
+                    "About NVDA",
+                    ["NVDA"],
+                    canonicalUrl="https://fool/a",
+                    clickThroughUrl="https://y/c",
+                ),
                 payload("Unrelated", ["RIVN"], canonicalUrl="https://y/x"),
                 payload(
                     "Rivian deliveries", ["RIVN", "NVDA"], canonicalUrl="https://y/r"
@@ -180,13 +185,17 @@ def test_fetch_yahoo_news_keeps_only_articles_about_the_asset(monkeypatch):
 
     news = news_tools.fetch_yahoo_news("nvda", "Nvidia")
 
+    # on cite l'URL du média, on lit la copie hébergée par Yahoo
     assert news == [
-        item(
-            "About NVDA",
-            "https://y/c",
-            "2026-11-05T09:50:00Z",
-            summary="Résumé",
-            source="Motley Fool",
+        news_tools.Article(
+            **item(
+                "About NVDA",
+                "https://fool/a",
+                "2026-11-05T09:50:00Z",
+                summary="Résumé",
+                source="Motley Fool",
+            ),
+            read_url="https://y/c",
         )
     ]
 
@@ -223,3 +232,50 @@ def test_collect_news_gives_unused_yahoo_quota_to_google(monkeypatch):
 
     assert len(news) == 6
     assert sum(bool(n["summary"]) for n in news) == 1
+
+
+LONG_TEXT = "Nvidia reported record revenue. " * 300  # ~9 600 caractères
+
+
+def test_add_article_content_reads_truncates_and_falls_back(monkeypatch):
+    pages = {"https://y/ok": LONG_TEXT, "https://y/video": "Trop court."}
+
+    def fake_fetch(url):
+        if url not in pages:
+            raise TimeoutError
+        return pages[url]
+
+    monkeypatch.setattr(news_tools, "fetch_article_text", fake_fetch)
+    base = item("T", "https://media/x", "2026-11-05T08:00:00Z", summary="Résumé")
+    articles = [
+        news_tools.Article(**base, read_url="https://y/ok"),
+        news_tools.Article(**base, read_url="https://y/video"),
+        news_tools.Article(**base, read_url="https://y/down"),
+        base,  # Google News : rien à lire
+    ]
+
+    ok, video, down, google = news_tools.add_article_content(articles)
+
+    assert ok["content"].startswith("Nvidia reported record revenue.")
+    assert len(ok["content"]) <= news_tools.CONTENT_MAX_CHARS + len(" […]")
+    assert ok["content"].endswith(" […]")
+    assert "content" not in video
+    assert "content" not in down
+    assert google == base
+
+
+def test_search_news_exposes_content_but_not_read_url(monkeypatch):
+    article = news_tools.Article(
+        **item("T", "https://media/x", "2026-11-05T08:00:00Z", summary="s"),
+        read_url="https://y/x",
+    )
+    monkeypatch.setattr(news_tools, "collect_news", lambda *a: [article])
+    monkeypatch.setattr(news_tools, "fetch_article_text", lambda url: LONG_TEXT)
+
+    (result,) = news_tools.search_news.invoke(
+        {"query": "Nvidia", "ticker": "NVDA", "lookback_days": 7}
+    )
+
+    assert result["url"] == "https://media/x"
+    assert "read_url" not in result
+    assert result["content"]

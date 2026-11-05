@@ -25,7 +25,9 @@ class NewsArticle(BaseModel):
     published_at: str = Field(
         description="Date ISO, recopiée exactement depuis l'outil"
     )
-    summary: str = Field(description="Une à deux phrases factuelles en français")
+    summary: str = Field(
+        description="Synthèse en français qui conserve tous les faits et chiffres clés"
+    )
 
 
 class NewsDigest(BaseModel):

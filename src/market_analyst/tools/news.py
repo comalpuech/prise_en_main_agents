@@ -3,6 +3,7 @@
 Deux sources complémentaires :
 - Google News RSS : couvre toute la période demandée, mais ne fournit que le titre ;
 - Yahoo Finance (yfinance) : fournit un résumé, mais ne remonte que les dernières heures.
+  Le texte des articles Yahoo retenus est en plus lu sur finance.yahoo.com (champ `content`).
 
 Le filtrage par date, la déduplication et le plafonnement sont faits en Python,
 pas par le LLM : l'agent ne voit que des articles déjà dans la fenêtre.
@@ -14,9 +15,11 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
+import trafilatura
 import yfinance as yf
 from langchain_core.tools import tool
 
@@ -28,6 +31,18 @@ GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
 USER_AGENT = "Mozilla/5.0 (compatible; market-analyst/0.1)"
 HTTP_TIMEOUT_S = 10
 MAX_RESULTS = 30
+CONTENT_MAX_CHARS = (
+    6000  # ≈ un article Yahoo entier : rien ne doit manquer à la synthèse
+)
+CONTENT_MIN_CHARS = 500  # en dessous (vidéo, page vide), on garde le résumé Yahoo
+CONTENT_WORKERS = 8
+
+
+class Article(NewsItem, total=False):
+    """`NewsItem` enrichi, propre à l'outil (jamais écrit dans l'état du graphe)."""
+
+    read_url: str  # page à lire, quand elle diffère de l'URL citée
+    content: str  # début du texte de l'article
 
 
 def _to_iso(dt: datetime) -> str:
@@ -71,16 +86,19 @@ def fetch_google_news(query: str, lookback_days: int) -> list[NewsItem]:
     return items
 
 
-def fetch_yahoo_news(ticker: str, name: str) -> list[NewsItem]:
+def fetch_yahoo_news(ticker: str, name: str) -> list[Article]:
     """Articles Yahoo Finance qui portent vraiment sur l'actif.
 
     Yahoo associe un ticker à presque tout article du secteur (NVDA à tout ce qui
     parle d'IA) : on exige en plus que le nom (`name`) ou le symbole (« NVDA »,
     « BTC » pour « BTC-USD ») apparaisse dans le titre ou le résumé.
+
+    `url` est l'URL du média d'origine (celle qu'on cite) ; `read_url` la copie
+    hébergée par Yahoo, lisible même quand l'original est payant.
     """
     symbol = ticker.split("-")[0]
     mention = re.compile(rf"\b({re.escape(name)}|{re.escape(symbol)})\b", re.IGNORECASE)
-    items: list[NewsItem] = []
+    items: list[Article] = []
     for raw in yf.Ticker(ticker).get_news(count=50):
         content = raw.get("content") or {}
         tickers = {
@@ -93,22 +111,61 @@ def fetch_yahoo_news(ticker: str, name: str) -> list[NewsItem]:
             f"{content.get('title', '')} {content.get('summary', '')}"
         ):
             continue
-        url = (content.get("canonicalUrl") or content.get("clickThroughUrl") or {}).get(
-            "url"
-        )
+        canonical = (content.get("canonicalUrl") or {}).get("url")
+        hosted = (content.get("clickThroughUrl") or {}).get("url")
+        url = canonical or hosted
         pub_date = content.get("pubDate")
         if not (content.get("title") and url and pub_date):
             continue
         items.append(
-            NewsItem(
+            Article(
                 title=content["title"].strip(),
                 source=(content.get("provider") or {}).get("displayName", ""),
                 url=url,
+                read_url=hosted or url,
                 published_at=_to_iso(datetime.fromisoformat(pub_date)),
                 summary=(content.get("summary") or "").strip(),
             )
         )
     return items
+
+
+def fetch_article_text(url: str) -> str:
+    """Texte principal de la page `url` (vide si l'extraction échoue)."""
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_S) as response:
+        html = response.read()
+    return trafilatura.extract(html, include_comments=False, include_tables=False) or ""
+
+
+def _truncate(text: str, max_chars: int = CONTENT_MAX_CHARS) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rsplit(" ", 1)[0] + " […]"
+
+
+def add_article_content(articles: list[Article]) -> list[Article]:
+    """Ajoute `content` aux articles qui ont une page lisible (`read_url`), en parallèle.
+
+    Une page en échec ou trop courte est ignorée : l'article garde son résumé.
+    """
+
+    def read(article: Article) -> Article:
+        try:
+            text = fetch_article_text(article["read_url"]).strip()
+        except Exception:
+            logger.info("Article illisible : %s", article["read_url"], exc_info=True)
+            return article
+        if len(text) < CONTENT_MIN_CHARS:
+            return article
+        return Article(**article, content=_truncate(text))
+
+    to_read = [a for a in articles if a.get("read_url")]
+    if not to_read:
+        return articles
+    with ThreadPoolExecutor(max_workers=CONTENT_WORKERS) as pool:
+        enriched = {id(a): r for a, r in zip(to_read, pool.map(read, to_read))}
+    return [enriched.get(id(a), a) for a in articles]
 
 
 def collect_news(
@@ -117,7 +174,7 @@ def collect_news(
     lookback_days: int = 7,
     max_results: int = MAX_RESULTS,
     now: datetime | None = None,
-) -> list[NewsItem]:
+) -> list[Article]:
     """Agrège les sources, filtre sur la fenêtre, déduplique et trie (plus récent d'abord).
 
     Jusqu'à la moitié du plafond est réservée à Yahoo : ses articles ont un résumé
@@ -144,7 +201,7 @@ def collect_news(
     )
 
 
-def _safe_fetch(fetch: Callable[..., list[NewsItem]], *args) -> list[NewsItem]:
+def _safe_fetch(fetch: Callable[..., list[Article]], *args) -> list[Article]:
     try:
         return fetch(*args)
     except Exception:  # réseau, format inattendu… on dégrade sans planter
@@ -155,10 +212,10 @@ def _safe_fetch(fetch: Callable[..., list[NewsItem]], *args) -> list[NewsItem]:
 
 
 def _fresh_unique(
-    items: list[NewsItem], cutoff: datetime, seen: set[str]
-) -> list[NewsItem]:
+    items: list[Article], cutoff: datetime, seen: set[str]
+) -> list[Article]:
     """Garde les articles postérieurs à `cutoff` et pas encore vus (URL ou titre)."""
-    kept: list[NewsItem] = []
+    kept: list[Article] = []
     for item in items:
         key = item["title"].casefold()
         if datetime.fromisoformat(item["published_at"]) < cutoff:
@@ -170,16 +227,16 @@ def _fresh_unique(
     return kept
 
 
-def _spread_over_days(items: list[NewsItem], max_results: int) -> list[NewsItem]:
+def _spread_over_days(items: list[Article], max_results: int) -> list[Article]:
     """Plafonne à `max_results` en piochant à tour de rôle dans chaque jour.
 
     Évite qu'une journée chargée n'évince le reste de la période.
     """
-    by_day: dict[str, list[NewsItem]] = {}
+    by_day: dict[str, list[Article]] = {}
     for item in sorted(items, key=lambda i: i["published_at"], reverse=True):
         by_day.setdefault(item["published_at"][:10], []).append(item)
 
-    picked: list[NewsItem] = []
+    picked: list[Article] = []
     queues = list(by_day.values())
     while len(picked) < max_results and any(queues):
         for queue in queues:
@@ -198,7 +255,9 @@ def search_news(query: str, ticker: str = "", lookback_days: int = 7) -> list[di
         lookback_days: profondeur de la recherche en jours.
 
     Returns:
-        Liste d'articles (title, source, url, published_at ISO UTC, summary éventuellement vide),
-        du plus récent au plus ancien.
+        Liste d'articles (title, source, url, published_at ISO UTC, summary éventuellement
+        vide, et pour certains `content` : texte de l'article), du plus récent au
+        plus ancien.
     """
-    return [dict(item) for item in collect_news(query, ticker or None, lookback_days)]
+    articles = add_article_content(collect_news(query, ticker or None, lookback_days))
+    return [{k: v for k, v in a.items() if k != "read_url"} for a in articles]
