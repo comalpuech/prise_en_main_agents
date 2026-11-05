@@ -1,0 +1,28 @@
+[project]
+name = "market-analyst"
+version = "0.1.0"
+description = "Analyste boursier / crypto multi-agents (LangChain + LangGraph)"
+authors = [
+    { name = "Yoann CORGNET" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "langchain>=1.4.9",
+    "langchain-google-genai>=4.4.3",
+    "langgraph>=1.2.20",
+    "pydantic-settings>=2.16.2",
+    "python-dotenv>=1.2.4",
+]
+
+[project.scripts]
+market-analyst = "market_analyst.main:main"
+
+[build-system]
+requires = ["uv_build>=0.10.9,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
