@@ -7,6 +7,12 @@ Deux sources complémentaires :
 
 Le filtrage par date, la déduplication et le plafonnement sont faits en Python,
 pas par le LLM : l'agent ne voit que des articles déjà dans la fenêtre.
+
+Mémoire (Store LangGraph, cf. `memory/news_memory.py`) : les articles riches (résumé
+ou texte) sont gardés d'une exécution à l'autre ; relancé chaque jour, l'outil accumule
+les articles Yahoo de toute la semaine et ne relit pas les pages déjà lues. Les articles
+déjà synthétisés par l'agent lui sont renvoyés avec cette synthèse (`known_summary`) à
+la place de leur texte.
 """
 
 import logging
@@ -16,13 +22,21 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
 import trafilatura
 import yfinance as yf
+from langchain.tools import ToolRuntime
 from langchain_core.tools import tool
 
+from market_analyst.memory.news_memory import (
+    get_syntheses,
+    recent_articles,
+    save_articles,
+)
+from market_analyst.memory.store import require_store
 from market_analyst.state import NewsItem
 
 logger = logging.getLogger(__name__)
@@ -38,11 +52,23 @@ CONTENT_MIN_CHARS = 500  # en dessous (vidéo, page vide), on garde le résumé 
 CONTENT_WORKERS = 8
 
 
+@dataclass(frozen=True)
+class NewsContext:
+    """Contexte d'exécution de l'agent de news (`context=` à l'appel).
+
+    Fixé par le code, pas par le LLM : l'outil ne dépend pas du modèle pour connaître
+    le ticker, qui sert à interroger Yahoo et à ranger la mémoire.
+    """
+
+    ticker: str = ""
+
+
 class Article(NewsItem, total=False):
     """`NewsItem` enrichi, propre à l'outil (jamais écrit dans l'état du graphe)."""
 
     read_url: str  # page à lire, quand elle diffère de l'URL citée
     content: str  # début du texte de l'article
+    known_summary: str  # synthèse déjà écrite par l'agent (remplace `content`)
 
 
 def _to_iso(dt: datetime) -> str:
@@ -148,6 +174,7 @@ def add_article_content(articles: list[Article]) -> list[Article]:
     """Ajoute `content` aux articles qui ont une page lisible (`read_url`), en parallèle.
 
     Une page en échec ou trop courte est ignorée : l'article garde son résumé.
+    Un article qui a déjà un `content` (venu du cache) n'est pas relu.
     """
 
     def read(article: Article) -> Article:
@@ -160,7 +187,7 @@ def add_article_content(articles: list[Article]) -> list[Article]:
             return article
         return Article(**article, content=_truncate(text))
 
-    to_read = [a for a in articles if a.get("read_url")]
+    to_read = [a for a in articles if a.get("read_url") and not a.get("content")]
     if not to_read:
         return articles
     with ThreadPoolExecutor(max_workers=CONTENT_WORKERS) as pool:
@@ -174,6 +201,7 @@ def collect_news(
     lookback_days: int = 7,
     max_results: int = MAX_RESULTS,
     now: datetime | None = None,
+    known: list[Article] | None = None,
 ) -> list[Article]:
     """Agrège les sources, filtre sur la fenêtre, déduplique et trie (plus récent d'abord).
 
@@ -181,13 +209,15 @@ def collect_news(
     mais datent tous des dernières heures, et seraient sinon évincés par la
     répartition jour par jour des articles Google News. La place inutilisée par
     une source revient à l'autre. Une source en échec est journalisée et ignorée.
+
+    `known` sont les articles riches déjà en cache : ils partagent le quota de Yahoo
+    et passent avant les articles frais, pour garder leur texte en cas de doublon.
     """
     cutoff = (now or datetime.now(UTC)) - timedelta(days=lookback_days)
     seen: set[str] = set()
-    # Yahoo d'abord : prioritaire en cas de doublon, puisqu'il a un résumé
-    yahoo = _fresh_unique(
-        _safe_fetch(fetch_yahoo_news, ticker, query) if ticker else [], cutoff, seen
-    )
+    # Cache puis Yahoo d'abord : prioritaires en cas de doublon (texte, résumé)
+    fresh_yahoo = _safe_fetch(fetch_yahoo_news, ticker, query) if ticker else []
+    yahoo = _fresh_unique([*(known or []), *fresh_yahoo], cutoff, seen)
     google = _fresh_unique(
         _safe_fetch(fetch_google_news, query, lookback_days), cutoff, seen
     )
@@ -246,18 +276,58 @@ def _spread_over_days(items: list[Article], max_results: int) -> list[Article]:
 
 
 @tool
-def search_news(query: str, ticker: str = "", lookback_days: int = 7) -> list[dict]:
+def search_news(
+    query: str, runtime: ToolRuntime[NewsContext], lookback_days: int = 7
+) -> list[dict]:
     """Recherche les actualités récentes sur une entreprise ou une crypto.
 
     Args:
         query: nom de l'entreprise ou de l'actif en anglais (ex. "Nvidia", "Bitcoin").
-        ticker: symbole Yahoo Finance (ex. "NVDA", "BTC-USD"), vide si inconnu.
         lookback_days: profondeur de la recherche en jours.
 
     Returns:
         Liste d'articles (title, source, url, published_at ISO UTC, summary éventuellement
-        vide, et pour certains `content` : texte de l'article), du plus récent au
-        plus ancien.
+        vide, et pour certains `content` : texte de l'article, ou `known_summary` :
+        synthèse déjà écrite lors d'un point précédent), du plus récent au plus ancien.
     """
-    articles = add_article_content(collect_news(query, ticker or None, lookback_days))
+    # `runtime` est injecté par LangGraph (store, contexte…) : le LLM ne le voit pas.
+    if runtime.context is None:
+        raise RuntimeError("search_news attend `context=NewsContext(...)` à l'appel")
+    store = require_store(runtime.store)
+    ticker = runtime.context.ticker
+    if not ticker:  # sans ticker, pas de Yahoo, donc rien à mémoriser
+        return _public(collect_news(query, None, lookback_days))
+
+    since = datetime.now(UTC) - timedelta(days=lookback_days)
+    known = [Article(**a) for a in recent_articles(store, ticker, since)]
+    articles = add_article_content(
+        collect_news(query, ticker, lookback_days, known=known)
+    )
+    # Seuls les articles riches méritent d'être gardés : Google News redonne les
+    # titres de toute la période à chaque appel.
+    save_articles(
+        store, ticker, [a for a in articles if a.get("summary") or a.get("content")]
+    )
+    return _public(_add_known_summaries(store, ticker, articles))
+
+
+def _public(articles: list[Article]) -> list[dict]:
+    """Ce que voit le LLM : tout sauf `read_url`."""
     return [{k: v for k, v in a.items() if k != "read_url"} for a in articles]
+
+
+def _add_known_summaries(store, ticker: str, articles: list[Article]) -> list[Article]:
+    """Remplace le texte des articles déjà synthétisés par leur synthèse.
+
+    Le texte ne servirait qu'à réécrire la même synthèse : on économise les tokens.
+    """
+    known = get_syntheses(store, ticker, (a["url"] for a in articles))
+    return [
+        Article(
+            **{k: v for k, v in a.items() if k != "content"},
+            known_summary=known[a["url"]],
+        )
+        if a["url"] in known
+        else a
+        for a in articles
+    ]

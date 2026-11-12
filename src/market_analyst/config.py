@@ -3,7 +3,7 @@
 from functools import lru_cache
 
 from dotenv import load_dotenv
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     llm_model: str = "google_genai:gemini-2.5-flash"  # "<provider>:<model>"
     google_model: str = ""
     default_lookback_days: int = 7
+    # Store LangGraph (mémoire des agents) : fichier SQLite relatif au dossier
+    # courant, ou ":memory:" (perdu à la sortie) ; jamais vide
+    memory_store_path: str = Field(default="data/memory.db", min_length=1)
+    # Durée de vie d'un souvenir depuis sa dernière écriture
+    memory_ttl_days: int = Field(default=30, gt=0)
 
     @model_validator(mode="after")
     def resolve_google_model(self) -> "Settings":

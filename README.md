@@ -81,6 +81,19 @@ signale. Une erreur LLM interrompt le pipeline sans publier de rapport partiel :
 la CLI termine avec le code 1 et un message sans détails sensibles du fournisseur.
 L'API Python conserve la cause de l'exception pour le diagnostic local.
 
+## Mémoire de l'agent de news
+
+L'Agent 1 garde d'une exécution à l'autre les articles riches (résumé Yahoo, texte
+lu) et les synthèses déjà écrites, dans un `LangGraph Store` (`SqliteStore`) passé
+au graphe à la compilation. Relancé chaque jour, il dispose d'articles avec texte
+sur toute la période et ne re-synthétise pas un article déjà traité.
+
+Le fichier est `data/memory.db`, relatif au dossier courant et ignoré par git.
+On le règle avec `MEMORY_STORE_PATH` (`:memory:` pour une mémoire jetable) et
+`MEMORY_TTL_DAYS` (30 par défaut). Les tests utilisent toujours une mémoire jetable.
+Détails : section « Mémoire de l'agent de news » de
+[docs/architecture.md](docs/architecture.md).
+
 ## Serveur MCP indépendant
 
 ```powershell
