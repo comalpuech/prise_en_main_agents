@@ -13,21 +13,15 @@ from pathlib import Path
 from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-<<<<<<< HEAD
-from pydantic import BaseModel, Field
-=======
 from langgraph.store.base import BaseStore
->>>>>>> origin/main
+from pydantic import BaseModel, Field
 
 from market_analyst.agents.market_data_agent import market_data_agent
 from market_analyst.agents.news_agent import news_agent
 from market_analyst.agents.writer_agent import writer_agent
 from market_analyst.config import get_settings
-<<<<<<< HEAD
 from market_analyst.llm import get_llm
-=======
 from market_analyst.memory.store import build_store
->>>>>>> origin/main
 from market_analyst.state import AnalystState
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "parse_request.md"
