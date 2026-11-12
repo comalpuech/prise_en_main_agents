@@ -115,3 +115,93 @@ retient 5 à 10 et les résume en français. Toute URL absente des résultats de
 
 Le nœud ne renvoie que la clé `news` : il tourne en parallèle de `market_data_agent`, et deux
 écritures concurrentes d'une même clé sans reducer feraient échouer le fan-in.
+
+## Mémoire de l'agent de news
+
+La mémoire est construite par étapes, en s'appuyant sur les briques de LangChain / LangGraph
+plutôt que sur un mécanisme maison :
+
+| Étape | Mémoire | Brique du framework | État |
+|---|---|---|---|
+| 1 | Articles sources gardés d'une exécution à l'autre | `LangGraph Store` (`SqliteStore`) | fait |
+| 2a | Synthèses déjà écrites, réutilisées | Store + middleware `after_agent` | fait |
+| 2b | Fiche du dernier point (« depuis le dernier point… ») | Store, middleware ou LangMem | reportée à l'agent rédacteur |
+| 3 | Recherche sémantique | Store + embeddings | à faire |
+| 4 | Mémoire court terme (`thread_id`) | checkpointer LangGraph | à faire |
+
+### Le Store et son injection (`memory/store.py`)
+
+Le `LangGraph Store` est une base clé-valeur partagée entre toutes les exécutions, rangée par
+namespaces (tuples). `build_store()` crée un `SqliteStore` sur `MEMORY_STORE_PATH`
+(`data/memory.db` par défaut, relatif au dossier courant, ignoré par git). On passe
+explicitement `":memory:"` pour une mémoire jetable, comme dans les tests. Il n'y a pas de repli
+silencieux : la valeur ne peut pas être vide.
+
+Le Store est créé **une seule fois, à la racine** : `build_graph()` compile le graphe avec
+`compile(store=build_store())` (on peut lui passer un autre Store, `build_graph(store=...)`).
+LangGraph l'injecte ensuite partout, y compris dans l'agent `create_agent` lancé depuis le nœud
+`news_agent` : `runtime.store` dans les nœuds et les middlewares, `ToolRuntime.store` dans les
+outils. Sans Store, l'outil et le middleware échouent avec un message clair au lieu de tourner
+sans mémoire.
+
+Le ticker arrive de la même façon, par le **contexte d'exécution** :
+`agent.invoke(..., context=NewsContext(ticker=...))`. C'est le code qui le fixe, pas le LLM :
+l'outil `search_news` ne prend plus de paramètre `ticker`.
+
+- **Durée de vie** : chaque élément expire `MEMORY_TTL_DAYS` jours (30 par défaut) après sa
+  dernière écriture, et non après sa date de publication. Un article revu est donc prolongé.
+  La purge (`sweep_ttl()`) a lieu à chaque `build_store()`. La fenêtre de dates des articles,
+  elle, vient du filtre de recherche.
+- **Pièges rencontrés** :
+  - `store.search` renvoie 10 éléments par défaut, il faut passer un `limit` explicite.
+  - `InMemoryStore` ne sait pas filtrer une plage de dates écrites en texte (il convertit en
+    float), d'où un `SqliteStore` même pour la mémoire jetable.
+  - `put` remplace toute la valeur, d'où la séquence get → fusion → put pour ne rien perdre.
+
+### Étape 1 — articles sources (`memory/news_memory.py`)
+
+Yahoo Finance ne remonte que les dernières heures. `search_news` garde donc les articles riches
+(résumé Yahoo ou texte lu) dans le namespace `("news", <TICKER>, "articles")`, avec l'URL comme
+clé, et les ressort aux appels suivants tant qu'ils sont dans la fenêtre demandée
+(`filter={"published_at": {"$gte": ...}}`).
+
+- **Pas de relecture** : un article qui a déjà un `content` n'est pas relu. Une page en échec est
+  retentée au passage suivant.
+- **Mise à jour sans perte** : un article revu ne perd jamais un résumé ou un texte déjà connu.
+- **Priorité à la mémoire** : les articles connus partagent le quota de Yahoo et passent avant
+  les articles frais en cas de doublon.
+- **Pas d'articles Google News** (titre seul) : le flux RSS redonne toute la période à chaque
+  appel.
+- **Données sources uniquement** : les synthèses du LLM vivent dans un namespace à part.
+- Sans ticker, il n'y a pas de mémoire (Yahoo n'est pas interrogé).
+
+Un `sqlite3` brut aurait suffi pour ce cache, mais le Store fait la même chose avec moins de
+code, et apporte en plus la purge (TTL) et une API commune avec les étapes suivantes.
+
+### Étape 2a — synthèses réutilisées
+
+- **Namespace `("news", <TICKER>, "syntheses")`**, clé = URL : la synthèse française de l'agent,
+  son titre et sa date.
+- **Lecture par l'outil** : un article déjà synthétisé arrive avec `known_summary` à la place de
+  son `content`, ce qui économise des tokens.
+- **Recopie et écriture par le code**, dans `SynthesisMemoryMiddleware.after_agent` :
+  - l'agent laisse `summary` vide pour ces articles et le middleware y remet la synthèse gardée
+    (quand on lui demandait de la recopier lui-même, le LLM la reformulait parfois) ;
+  - le middleware retient ensuite toutes les synthèses.
+  - Le middleware n'est pas une API de mémoire : c'est le point d'accroche que `create_agent`
+    prévoit pour agir avant ou après l'agent, le modèle ou les outils.
+
+Gain mesuré sur NVDA (Gemini 2.5 Flash, deux exécutions de suite à travers un graphe compilé
+avec le Store) :
+
+| | Tokens d'entrée | Tokens de sortie | Pages lues |
+|---|---|---|---|
+| Mémoire vide | ~20 000 | ~13 000 | 15 |
+| 10 synthèses connues | ~14 400 | ~7 900 | 0 |
+
+Les tokens de sortie varient beaucoup d'une exécution à l'autre, car ils sont dominés par le
+raisonnement du modèle.
+
+LangChain 1.4.9 émet un avertissement `PydanticSerializationUnexpectedValue` à chaque appel
+d'agent qui utilise un `context_schema`. Il vient de la bibliothèque, pas du projet, et n'a pas
+d'effet sur le résultat.

@@ -11,8 +11,9 @@ from pydantic import BaseModel, Field
 
 from market_analyst.config import get_settings
 from market_analyst.llm import get_llm
+from market_analyst.memory.news_memory import SynthesisMemoryMiddleware
 from market_analyst.state import AnalystState, NewsItem
-from market_analyst.tools.news import search_news
+from market_analyst.tools.news import NewsContext, search_news
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "news.md"
 
@@ -27,7 +28,8 @@ class NewsArticle(BaseModel):
         description="Date ISO, recopiée exactement depuis l'outil"
     )
     summary: str = Field(
-        description="Synthèse en français qui conserve tous les faits et chiffres clés"
+        description="Synthèse en français qui conserve tous les faits et chiffres "
+        "clés ; vide si l'article a un `known_summary`"
     )
 
 
@@ -39,12 +41,18 @@ class NewsDigest(BaseModel):
 
 @cache
 def build_news_agent() -> CompiledStateGraph:
-    """Agent ReAct : appelle `search_news`, puis renvoie un `NewsDigest` structuré."""
+    """Agent ReAct : appelle `search_news`, puis renvoie un `NewsDigest` structuré.
+
+    Pas de `store=` ici : le Store vient du graphe parent (`compile(store=...)`) et
+    LangGraph le propage à l'agent, à ses outils et à ses middlewares.
+    """
     return create_agent(
         get_llm(),
         tools=[search_news],
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
         response_format=NewsDigest,
+        middleware=[SynthesisMemoryMiddleware()],
+        context_schema=NewsContext,
         name="news_agent",
     )
 
@@ -66,7 +74,9 @@ def news_agent(state: AnalystState) -> AnalystState:
         f"Ticker : {ticker or 'inconnu'}\n"
         f"Période : {lookback_days} derniers jours"
     )
-    result = build_news_agent().invoke({"messages": [HumanMessage(task)]})
+    result = build_news_agent().invoke(
+        {"messages": [HumanMessage(task)]}, context=NewsContext(ticker=ticker)
+    )
     digest: NewsDigest = result["structured_response"]
 
     # Correspondance exacte, jamais un test de sous-chaîne (une URL tronquée

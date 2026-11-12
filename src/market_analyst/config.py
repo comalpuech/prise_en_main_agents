@@ -3,7 +3,7 @@
 from functools import lru_cache
 
 from dotenv import load_dotenv
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,10 +13,18 @@ class Settings(BaseSettings):
     llm_model: str = "google_genai:gemini-2.5-flash"  # "<provider>:<model>"
     google_model: str = ""
     default_lookback_days: int = 7
+<<<<<<< HEAD
     # Appels LLM : un pipeline en fait 6 à 8, une erreur 503 passagère ne doit pas
     # tout arrêter. Les SDK réessaient avec un délai croissant.
     llm_timeout_s: float = 30
     llm_max_retries: int = 4
+=======
+    # Store LangGraph (mémoire des agents) : fichier SQLite relatif au dossier
+    # courant, ou ":memory:" (perdu à la sortie) ; jamais vide
+    memory_store_path: str = Field(default="data/memory.db", min_length=1)
+    # Durée de vie d'un souvenir depuis sa dernière écriture
+    memory_ttl_days: int = Field(default=30, gt=0)
+>>>>>>> origin/main
 
     @model_validator(mode="after")
     def resolve_google_model(self) -> "Settings":

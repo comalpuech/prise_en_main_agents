@@ -274,7 +274,7 @@ def test_pipeline_with_langchain_tool_calls_offline(monkeypatch, fake_parser):
         responses=[
             call(
                 "search_news",
-                {"query": "Nvidia", "ticker": "NVDA", "lookback_days": 7},
+                {"query": "Nvidia", "lookback_days": 7},  # ticker : via le contexte
                 "n",
             ),
             call("NewsDigest", {"articles": [article]}, "digest"),
@@ -295,7 +295,7 @@ def test_pipeline_with_langchain_tool_calls_offline(monkeypatch, fake_parser):
             "# NVDA\n## Points clés\n- Clôture à 129.00 ; Nvidia publie ses résultats."
         ),
     )
-    monkeypatch.setattr(news, "collect_news", lambda *a: [article])
+    monkeypatch.setattr(news, "collect_news", lambda *a, **k: [article])
     monkeypatch.setattr(news, "add_article_content", lambda articles: articles)
     # Fenêtre fixe pour tester les vrais calculs sans dépendre du jour d'exécution.
     real_collect = market.collect_market_metrics

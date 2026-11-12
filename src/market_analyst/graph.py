@@ -13,13 +13,21 @@ from pathlib import Path
 from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+<<<<<<< HEAD
 from pydantic import BaseModel, Field
+=======
+from langgraph.store.base import BaseStore
+>>>>>>> origin/main
 
 from market_analyst.agents.market_data_agent import market_data_agent
 from market_analyst.agents.news_agent import news_agent
 from market_analyst.agents.writer_agent import writer_agent
 from market_analyst.config import get_settings
+<<<<<<< HEAD
 from market_analyst.llm import get_llm
+=======
+from market_analyst.memory.store import build_store
+>>>>>>> origin/main
 from market_analyst.state import AnalystState
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "parse_request.md"
@@ -103,8 +111,12 @@ def parse_request(state: AnalystState) -> AnalystState:
     return {"ticker": ticker, "company": company or ticker, "lookback_days": days}
 
 
-def build_graph() -> CompiledStateGraph:
-    """Construit et compile le StateGraph."""
+def build_graph(store: BaseStore | None = None) -> CompiledStateGraph:
+    """Construit et compile le StateGraph.
+
+    Le Store (mémoire partagée entre les exécutions) est créé ici, à la racine :
+    LangGraph l'injecte ensuite dans les nœuds, les agents et leurs outils.
+    """
     graph = StateGraph(AnalystState)
     graph.add_node("parse_request", parse_request)
     graph.add_node("news_agent", news_agent)
@@ -115,4 +127,4 @@ def build_graph() -> CompiledStateGraph:
     graph.add_edge("parse_request", "market_data_agent")
     graph.add_edge(["news_agent", "market_data_agent"], "writer_agent")
     graph.add_edge("writer_agent", END)
-    return graph.compile()
+    return graph.compile(store=store if store is not None else build_store())
