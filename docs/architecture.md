@@ -68,7 +68,9 @@ système de vérification indépendante des faits.
 
 ## MCP — exécution séparée
 
-`mcp_server.py` conserve le serveur stdio de la branche MCP, avec les outils
+Le package `market_mcp` (`src/market_mcp/server.py`) est séparé de
+`market_analyst` : c'est un serveur stdio autonome, pas un outil du graphe. Il ne
+dépend que de la collecte d'actualités et du prompt du rédacteur. Il expose les outils
 `ping`, `get_news`, `get_price_summary`, la ressource `prompt://writer` et le prompt
 `weekly_note`. Le pipeline n'utilise pas MCP pour cette version. En particulier,
 le résumé de cours MCP ne remplace pas l'outil financier plus complet de l'Agent 2.

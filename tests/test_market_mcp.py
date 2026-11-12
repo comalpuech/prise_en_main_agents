@@ -7,8 +7,8 @@ from pathlib import Path
 import pandas as pd
 from mcp import Client, StdioServerParameters
 
-from market_analyst import mcp_server
 from market_analyst.tools.news import Article
+from market_mcp import server as mcp_server
 
 
 def run(coro):
@@ -107,7 +107,7 @@ def test_server_runs_as_independent_stdio_process():
     async def check():
         parameters = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "market_analyst.mcp_server"],
+            args=["-m", "market_mcp"],
             cwd=str(Path(__file__).resolve().parent.parent),
         )
         async with Client(parameters, read_timeout_seconds=10) as client:

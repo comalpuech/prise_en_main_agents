@@ -1,14 +1,17 @@
-"""Serveur MCP exposant les outils de l'analyste (transport stdio).
+"""Serveur MCP exposant les outils de marché (transport stdio).
 
-Lancement : `uv run python -m market_analyst.mcp_server`
-Inspecteur : `uv run mcp dev src/market_analyst/mcp_server.py`
+Indépendant du workflow agentique : il n'utilise ni le graphe ni les agents,
+seulement la collecte d'actualités et le prompt du rédacteur de `market_analyst`.
+
+Lancement : `uv run market-mcp` (ou `uv run python -m market_mcp`)
+Inspecteur : `uv run mcp dev src/market_mcp/server.py`
 
 Attention : en stdio, stdout sert au protocole. Aucun print() ici, seulement `logging`
 (qui écrit sur stderr).
 """
 
 import logging
-from pathlib import Path
+from importlib.resources import files
 
 import yfinance as yf
 from mcp.server.mcpserver import MCPServer
@@ -17,9 +20,9 @@ from market_analyst.tools.news import add_article_content, collect_news
 
 logger = logging.getLogger(__name__)
 
-PROMPTS_DIR = Path(__file__).parent / "prompts"
+WRITER_PROMPT = files("market_analyst") / "prompts" / "writer.md"
 
-mcp = MCPServer("market-analyst")
+mcp = MCPServer("market-mcp")
 
 
 @mcp.tool()
@@ -78,7 +81,7 @@ def get_price_summary(ticker: str, days: int = 7) -> dict:
 @mcp.resource("prompt://writer")
 def writer_prompt() -> str:
     """Prompt système de l'agent rédacteur (règles et format de la note)."""
-    return (PROMPTS_DIR / "writer.md").read_text(encoding="utf-8")
+    return WRITER_PROMPT.read_text(encoding="utf-8")
 
 
 @mcp.prompt()

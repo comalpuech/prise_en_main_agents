@@ -20,10 +20,14 @@ dependencies = [
 
 [project.scripts]
 market-analyst = "market_analyst.main:main"
+market-mcp = "market_mcp.server:main"
 
 [build-system]
 requires = ["uv_build>=0.10.9,<0.11.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = ["market_analyst", "market_mcp"]
 
 [dependency-groups]
 dev = [

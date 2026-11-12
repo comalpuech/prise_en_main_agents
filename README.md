@@ -84,9 +84,14 @@ L'API Python conserve la cause de l'exception pour le diagnostic local.
 ## Serveur MCP indépendant
 
 ```powershell
-uv run --locked python -m market_analyst.mcp_server
-uv run --locked mcp dev src/market_analyst/mcp_server.py
+uv run --locked market-mcp
+uv run --locked mcp dev src/market_mcp/server.py
 ```
+
+Le serveur est un package distinct, `src/market_mcp`, et non un outil du
+workflow agentique : il n'importe ni le graphe ni les agents de `market_analyst`.
+Il réutilise seulement la collecte d'actualités (`market_analyst.tools.news`) et
+le prompt du rédacteur. `uv run --locked python -m market_mcp` fonctionne aussi.
 
 Le serveur utilise stdio : il attend un client MCP ; stdout est réservé au
 protocole et les logs sont envoyés sur stderr. Le deuxième lancement ouvre
@@ -102,7 +107,7 @@ SMA et la volatilité de l'Agent 2. Aucun routage des agents par MCP n'est requi
 ```powershell
 uv run --locked pytest -q
 uv run --locked pytest tests/test_graph.py tests/test_writer_agent.py tests/test_main.py -q
-uv run --locked pytest tests/test_mcp_server.py -q
+uv run --locked pytest tests/test_market_mcp.py -q
 uv run --locked ruff check .
 uv run --locked ruff format --check .
 uv lock --check
