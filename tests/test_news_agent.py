@@ -74,9 +74,11 @@ class FakeAgent:
     def __init__(self, articles: list[NewsArticle], tool_output: str):
         self.articles, self.tool_output = articles, tool_output
         self.calls: list[dict] = []
+        self.contexts: list = []
 
-    def invoke(self, payload):
+    def invoke(self, payload, context=None):
         self.calls.append(payload)
+        self.contexts.append(context)
         return {
             "messages": [
                 *payload["messages"],
@@ -114,6 +116,7 @@ def test_news_agent_returns_only_news_and_drops_invented_urls(monkeypatch):
     assert "Nvidia" in prompt
     assert "NVDA" in prompt
     assert "7" in prompt
+    assert agent.contexts == [news_tools.NewsContext(ticker="NVDA")]
 
 
 def test_news_agent_requires_exact_source_url_and_preserves_metadata(monkeypatch):
@@ -283,17 +286,15 @@ def test_add_article_content_reads_truncates_and_falls_back(monkeypatch):
     assert google == base
 
 
-def test_search_news_exposes_content_but_not_read_url(monkeypatch):
+def test_search_news_exposes_content_but_not_read_url(monkeypatch, search_news):
     article = news_tools.Article(
         **item("T", "https://media/x", "2026-11-05T08:00:00Z", summary="s"),
         read_url="https://y/x",
     )
-    monkeypatch.setattr(news_tools, "collect_news", lambda *a: [article])
+    monkeypatch.setattr(news_tools, "collect_news", lambda *a, **k: [article])
     monkeypatch.setattr(news_tools, "fetch_article_text", lambda url: LONG_TEXT)
 
-    (result,) = news_tools.search_news.invoke(
-        {"query": "Nvidia", "ticker": "NVDA", "lookback_days": 7}
-    )
+    (result,) = search_news({"query": "Nvidia", "lookback_days": 7})
 
     assert result["url"] == "https://media/x"
     assert "read_url" not in result
