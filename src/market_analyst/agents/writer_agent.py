@@ -1,15 +1,11 @@
 """Agent 3 — rédacteur de la note d'analyse."""
 
-import os
 from pathlib import Path
 
-from dotenv import load_dotenv
 from langchain.agents import create_agent
-from langchain.chat_models import init_chat_model
 
+from market_analyst.llm import get_llm
 from market_analyst.state import AnalystState
-
-load_dotenv()
 
 # agents/writer_agent.py → parent = agents/ → parent = market_analyst/
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "writer.md"
@@ -17,12 +13,12 @@ SYSTEM_PROMPT = PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def build_writer():
-    """Construit l'agent rédacteur, utilisable seul."""
-    model = init_chat_model(
-        os.getenv("LLM_MODEL"),
-        timeout=30,
-        max_retries=1,
-    )
+    """Construit l'agent rédacteur, utilisable seul.
+
+    Le modèle vient de `get_llm()` (LLM_MODEL du .env, sinon la valeur par défaut
+    de config.py), comme pour les autres agents.
+    """
+    model = get_llm(timeout=30, max_retries=1)
     return create_agent(model=model, tools=[], system_prompt=SYSTEM_PROMPT)
 
 

@@ -6,10 +6,13 @@ from langchain_core.language_models import BaseChatModel
 from market_analyst.config import get_settings
 
 
-def get_llm(temperature: float = 0.0) -> BaseChatModel:
+def get_llm(temperature: float = 0.0, **kwargs) -> BaseChatModel:
     """Retourne le ChatModel configuré via `langchain.chat_models.init_chat_model`.
 
     Fournisseur par défaut : Google AI Studio (Gemini, offre gratuite), clé dans
     GOOGLE_API_KEY. Changer LLM_MODEL suffit pour basculer de fournisseur.
+    `kwargs` (timeout, max_retries…) est transmis tel quel à `init_chat_model`.
     """
-    return init_chat_model(get_settings().llm_model, temperature=temperature)
+    return init_chat_model(
+        get_settings().llm_model, temperature=temperature, **kwargs
+    )
