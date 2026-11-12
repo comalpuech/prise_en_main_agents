@@ -1,5 +1,6 @@
 """Agent 1 — veille d'actualités sur une entreprise."""
 
+import json
 from functools import cache
 from pathlib import Path
 
@@ -40,7 +41,7 @@ class NewsDigest(BaseModel):
 def build_news_agent() -> CompiledStateGraph:
     """Agent ReAct : appelle `search_news`, puis renvoie un `NewsDigest` structuré."""
     return create_agent(
-        get_llm(),
+        get_llm(timeout=30, max_retries=1),
         tools=[search_news],
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
         response_format=NewsDigest,
@@ -68,14 +69,40 @@ def news_agent(state: AnalystState) -> AnalystState:
     result = build_news_agent().invoke({"messages": [HumanMessage(task)]})
     digest: NewsDigest = result["structured_response"]
 
-    # Garde-fou anti-hallucination : on ne garde que les URLs réellement renvoyées par l'outil.
-    tool_output = "\n".join(
-        str(m.content) for m in result["messages"] if isinstance(m, ToolMessage)
-    )
+    # Correspondance exacte, jamais un test de sous-chaîne (une URL tronquée
+    # ou le message de sortie structurée ne constitue pas une preuve de source).
+    sources = {}
+    for message in result["messages"]:
+        if not isinstance(message, ToolMessage) or message.name not in (
+            None,
+            "search_news",
+        ):
+            continue
+        try:
+            articles = json.loads(message.content)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(articles, list):
+            sources.update(
+                {
+                    item["url"]: item
+                    for item in articles
+                    if isinstance(item, dict) and isinstance(item.get("url"), str)
+                }
+            )
     return {
         "news": [
-            NewsItem(**article.model_dump())
+            NewsItem(
+                **{
+                    **article.model_dump(),
+                    **{
+                        key: sources[article.url][key]
+                        for key in ("title", "source", "published_at")
+                        if key in sources[article.url]
+                    },
+                }
+            )
             for article in digest.articles
-            if article.url and article.url in tool_output
+            if article.url and article.url in sources
         ]
     }

@@ -116,6 +116,25 @@ def test_news_agent_returns_only_news_and_drops_invented_urls(monkeypatch):
     assert "7" in prompt
 
 
+def test_news_agent_requires_exact_source_url_and_preserves_metadata(monkeypatch):
+    import json
+
+    original = NewsArticle(
+        title="Titre source",
+        source="Source",
+        url="https://real/story",
+        published_at="2026-11-04T10:00:00Z",
+        summary="Synthèse fournie",
+    )
+    invented = original.model_copy(update={"title": "Titre inventé", "source": "Autre"})
+    truncated = original.model_copy(update={"url": "https://real"})
+    agent = FakeAgent([invented, truncated], json.dumps([original.model_dump()]))
+    monkeypatch.setattr(news_agent_module, "build_news_agent", lambda: agent)
+    assert news_agent({"ticker": "NVDA", "lookback_days": 7}) == {
+        "news": [original.model_dump()]
+    }
+
+
 RSS = b"""<?xml version="1.0"?><rss><channel>
 <item><title>Nvidia beats estimates - Reuters</title><link>https://news.google.com/a</link>
 <pubDate>Wed, 04 Nov 2026 18:29:00 GMT</pubDate><source url="https://reuters.com">Reuters</source></item>

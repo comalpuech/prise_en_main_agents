@@ -13,6 +13,4 @@ def get_llm(temperature: float = 0.0, **kwargs) -> BaseChatModel:
     GOOGLE_API_KEY. Changer LLM_MODEL suffit pour basculer de fournisseur.
     `kwargs` (timeout, max_retries…) est transmis tel quel à `init_chat_model`.
     """
-    return init_chat_model(
-        get_settings().llm_model, temperature=temperature, **kwargs
-    )
+    return init_chat_model(get_settings().llm_model, temperature=temperature, **kwargs)

@@ -1,9 +1,11 @@
 """Tests hors-ligne du serveur MCP (réseau mocké, client MCP en mémoire)."""
 
 import asyncio
+import sys
+from pathlib import Path
 
 import pandas as pd
-from mcp import Client
+from mcp import Client, StdioServerParameters
 
 from market_analyst import mcp_server
 from market_analyst.tools.news import Article
@@ -19,7 +21,11 @@ class FakeTicker:
 
     def history(self, period):
         return pd.DataFrame(
-            {"Close": [100.0, 105.0, 110.0], "High": [101, 106, 112], "Low": [99, 103, 108]},
+            {
+                "Close": [100.0, 105.0, 110.0],
+                "High": [101, 106, 112],
+                "Low": [99, 103, 108],
+            },
             index=pd.to_datetime(["2026-11-03", "2026-11-04", "2026-11-05"]),
         )
 
@@ -95,3 +101,37 @@ def test_get_news_hides_read_url(monkeypatch):
 
 def test_writer_prompt_resource():
     assert "## Limites de l'analyse" in mcp_server.writer_prompt()
+
+
+def test_server_runs_as_independent_stdio_process():
+    async def check():
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "market_analyst.mcp_server"],
+            cwd=str(Path(__file__).resolve().parent.parent),
+        )
+        async with Client(parameters, read_timeout_seconds=10) as client:
+            tools = {tool.name for tool in (await client.list_tools()).tools}
+            response = await client.call_tool("ping", {"name": "integration"})
+            return tools, response.content[0].text
+
+    tools, reply = run(asyncio.wait_for(check(), timeout=20))
+    assert tools == {"ping", "get_news", "get_price_summary"}
+    assert reply == "Bonjour integration"
+
+
+def test_mcp_returns_tool_error_on_network_failure(monkeypatch):
+    class FailingTicker:
+        def __init__(self, ticker):
+            pass
+
+        def history(self, period):
+            raise TimeoutError("Source de cours indisponible")
+
+    monkeypatch.setattr(mcp_server.yf, "Ticker", FailingTicker)
+
+    async def check():
+        async with Client(mcp_server.mcp) as client:
+            return await client.call_tool("get_price_summary", {"ticker": "NVDA"})
+
+    assert run(check()).is_error

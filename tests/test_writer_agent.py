@@ -55,6 +55,7 @@ def test_get_llm_falls_back_to_default_model_without_env(monkeypatch, tmp_path):
         return spy_model(NOTE)
 
     monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("GOOGLE_MODEL", raising=False)
     monkeypatch.chdir(tmp_path)  # aucun .env lisible par pydantic-settings
     monkeypatch.setattr(config, "load_dotenv", lambda: None)  # ni par python-dotenv
     monkeypatch.setattr(llm, "init_chat_model", fake_init_chat_model)
@@ -119,13 +120,12 @@ METRICS = MarketMetrics(
     weekly_return_pct=5.13,
     sma_short=185.2,
     sma_long=172.9,
-    volatility_annualized=0.41,
+    volatility_annualized=41.0,
 )
 
 
-@pytest.mark.xfail(raises=NotImplementedError, reason="writer_agent() pas encore écrit")
 def test_writer_agent_node_fills_only_report(monkeypatch):
-    model = spy_model(NOTE)
+    model = spy_model('{"news_indices": [0]}')
     monkeypatch.setattr(writer_module, "get_llm", lambda **_: model)
 
     out = writer_agent(
@@ -139,9 +139,98 @@ def test_writer_agent_node_fills_only_report(monkeypatch):
         }
     )
 
-    assert out == {"report": NOTE}
+    assert set(out) == {"report"}
+    assert "Nvidia beats estimates" in out["report"]
+    assert "191.7500" in out["report"]
+    assert "41.0000" in out["report"]
     # le LLM a bien reçu les faits et les chiffres de l'état
     sent = model.seen[0][-1].content
     assert "NVDA" in sent
     assert "Nvidia beats estimates" in sent
     assert "191.75" in sent
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        NOTE,
+        '{"news_indices": [-1]}',
+        '{"news_indices": [99]}',
+        '{"news_indices": [true]}',
+        '{"news_indices": [0, 0]}',
+    ],
+)
+def test_writer_never_publishes_free_llm_text(monkeypatch, reply):
+    model = spy_model(reply)
+    monkeypatch.setattr(writer_module, "get_llm", lambda **_: model)
+    report = writer_agent({"ticker": "NVDA", "news": NEWS, "metrics": METRICS})[
+        "report"
+    ]
+    assert "191.7500" in report
+    assert NOTE not in report
+    assert "Tri LLM invalide" in report
+
+
+def test_writer_missing_data_needs_no_llm(monkeypatch):
+    def forbidden(**kwargs):
+        raise AssertionError("Aucune sélection à demander")
+
+    monkeypatch.setattr(writer_module, "get_llm", forbidden)
+    report = writer_agent({"ticker": "NVDA", "news": [], "metrics": {}})["report"]
+    assert "Aucune actualité" in report
+    assert "Indicateurs indisponibles" in report
+    assert "SMA 20" in report
+
+
+def test_writer_error_keeps_cause(monkeypatch):
+    error = TimeoutError("fournisseur indisponible")
+
+    def fail(**kwargs):
+        raise error
+
+    monkeypatch.setattr(writer_module, "get_llm", fail)
+    with pytest.raises(RuntimeError, match="rédacteur") as caught:
+        writer_agent({"ticker": "NVDA", "news": NEWS})
+    assert caught.value.__cause__ is error
+
+
+def test_writer_bounds_report_and_does_not_mutate_state(monkeypatch):
+    from copy import deepcopy
+
+    model = spy_model('{"news_indices": [0, 1, 2]}')
+    monkeypatch.setattr(writer_module, "get_llm", lambda **_: model)
+    state = {
+        "ticker": "NVDA",
+        "news": [dict(NEWS[0], summary="Fait fourni. " * 100)] * 4,
+        "metrics": METRICS,
+    }
+    before = deepcopy(state)
+    report = writer_agent(state)["report"]
+    assert state == before
+    assert len(report.split()) <= 350
+
+
+def test_writer_omits_nonfinite_metrics(monkeypatch):
+    monkeypatch.setattr(
+        writer_module, "get_llm", lambda **_: spy_model('{"news_indices": [0]}')
+    )
+    report = writer_agent(
+        {
+            "ticker": "NVDA",
+            "news": NEWS,
+            "metrics": {"last_close": float("nan"), "sma_short": float("inf")},
+        }
+    )["report"]
+    assert "Indicateurs indisponibles" in report
+    assert ": nan" not in report and ": inf" not in report
+
+
+def test_writer_accepts_json_fence(monkeypatch):
+    monkeypatch.setattr(
+        writer_module,
+        "get_llm",
+        lambda **_: spy_model('```json\n{"news_indices": [0]}\n```'),
+    )
+    report = writer_agent({"ticker": "NVDA", "news": NEWS})["report"]
+    assert "Nvidia beats estimates" in report
+    assert "Tri LLM invalide" not in report

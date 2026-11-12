@@ -21,6 +21,59 @@
 | `market_data_agent` (Agent 2) | cours + indicateurs | `metrics` |
 | `writer_agent` (Agent 3) | note d'analyse | `report` |
 
+`build_graph()` utilise une arête de jonction explicite depuis la liste
+`[news_agent, market_data_agent]` : le rédacteur s'exécute une fois, après les deux.
+Les états renvoyés sont des mises à jour partielles, pas des copies de l'état entier.
+
+## Interprétation et erreurs
+
+`parse_request` accepte le nom Nvidia (association explicite NVDA) ou un ticker
+fourni par l'utilisateur ; il ne demande pas au LLM d'inventer un symbole.
+Les demandes ambiguës ou contradictoires lèvent `RequestError`. La durée est
+un entier positif de 1 à 3650 jours ; « cette semaine » signifie 7 jours glissants.
+Sans autre durée, le défaut vient de la configuration commune.
+
+Les trois agents passent par `get_llm` : `LLM_MODEL` explicite prime sur
+`GOOGLE_MODEL`, puis vient le défaut `google_genai:gemini-2.5-flash`.
+Les appels LLM sont bornés à 30 secondes par requête et une tentative ; un agent
+ReAct peut faire plusieurs requêtes. Une panne LLM arrête le pipeline. Les causes
+Python sont conservées ; la CLI affiche un message générique sans texte brut du SDK.
+
+Les outils de collecte dégradent leurs résultats en liste/dictionnaire vide avec
+logs en cas de source indisponible. Le rédacteur doit traiter ces absences comme
+des données manquantes, jamais comme une absence de risque ou une valeur nulle.
+
+## Agent 2 — indicateurs déterministes
+
+L'agent LangChain appelle `get_market_metrics` (retour direct), dont l'artefact
+contient ticker, période et `MarketMetrics`. Le nœud vérifie l'identité de la
+demande avant d'en extraire exclusivement `metrics` ; la prose LLM est ignorée.
+Les calculs de la contribution Roman sont conservés : clôtures ajustées, période
+calendaire hors journée UTC courante, rendement première/dernière clôture de la
+période, SMA 5/20 séances et volatilité échantillonnale annualisée sur 252 séances.
+Rendement et volatilité sont en pourcentage ; les trois autres valeurs sont dans
+la devise de cotation, non déduite automatiquement. Les champs sont optionnels.
+
+## Agent 3 — sélection et assemblage sourcé
+
+`build_writer` conserve l'agent LangChain et le prompt de Côme. Dans le pipeline,
+le mode sélection demande uniquement des indices d'actualités (au plus trois).
+Python valide ces indices puis construit la note avec des extraits de `news`
+et le formatage des chiffres de `metrics`. Aucun fait ni chiffre de la prose
+libre du rédacteur n'est publié. Une sélection invalide reprend les premières
+actualités fournies et l'indique dans les limites. Sans actualités, aucun appel
+LLM de sélection n'est nécessaire. Les synthèses de l'Agent 1 restent soumises
+à la fiabilité des sources et de sa synthèse LLM : le pipeline n'est pas un
+système de vérification indépendante des faits.
+
+## MCP — exécution séparée
+
+`mcp_server.py` conserve le serveur stdio de la branche MCP, avec les outils
+`ping`, `get_news`, `get_price_summary`, la ressource `prompt://writer` et le prompt
+`weekly_note`. Le pipeline n'utilise pas MCP pour cette version. En particulier,
+le résumé de cours MCP ne remplace pas l'outil financier plus complet de l'Agent 2.
+Un test lance un client et un serveur réels en sous-processus stdio, sans réseau.
+
 
 ## Agent 1 — veille d'actualités
 
