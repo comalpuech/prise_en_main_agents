@@ -46,15 +46,18 @@ Avec le venv Windows existant :
 .\.venv\Scripts\python.exe -m market_analyst.agents.market_data_agent NVDA 7
 ```
 
-Le nom Nvidia correspond explicitement à NVDA. Les autres noms d'entreprises ne
-sont pas devinés : fournir un ticker avec `--ticker`, `$MSFT`, `ticker MSFT`,
-ou un symbole en majuscules dans la demande. Ce symbole n'est pas validé avant
-la récupération Yahoo ; aucun autre nom d'entreprise n'est inventé.
-Une demande multi-actifs, contradictoire ou ambiguë est refusée.
+La demande est interprétée par le LLM (sortie structurée `ParsedRequest`) :
+n'importe quelle entreprise, crypto ou indice (« point sur Apple ce mois-ci »,
+« et LVMH ? », « le Bitcoin sur 2 semaines ») est traduite en symbole Yahoo
+(`AAPL`, `MC.PA`, `BTC-USD`) et en durée en jours (« ce mois » = 30). Python
+valide ensuite le format du symbole et la durée (1 à 3650 jours). `--ticker` et
+`--days` sont prioritaires sur l'interprétation ; avec `--ticker` seul, aucun
+appel LLM n'est fait. Une demande multi-actifs, sans actif ou ambiguë est refusée.
+Le symbole n'est pas vérifié auprès de Yahoo avant la collecte : un symbole
+inexistant donne des indicateurs vides, signalés dans la note.
 
 « Cette semaine » signifie les 7 derniers jours calendaires, pas la semaine civile.
-Une durée de 1 à 3650 jours peut être fournie ; les mois et années ne sont pas
-interprétés automatiquement. Sans durée : 7 jours par défaut configurable.
+Sans durée : 7 jours par défaut configurable.
 
 ## Données et garanties du rapport
 
@@ -62,10 +65,13 @@ interprétés automatiquement. Sans durée : 7 jours par défaut configurable.
   synthétise les actualités. Les URL absentes des résultats d'outil sont écartées.
 - Agent 2 : LangChain appelle `get_market_metrics`. Les calculs viennent uniquement
   de Python/pandas ; le texte du LLM ne fournit jamais les métriques finales.
-- Agent 3 : Gemini sélectionne au maximum trois indices d'actualités. Python
-  assemble les extraits fournis et les indicateurs, sans publier sa prose libre.
-  Une sélection invalide conserve l'ordre fourni et signale cette limite.
-  La qualité factuelle des synthèses de l'Agent 1 reste dépendante des sources et du LLM.
+- Agent 3 : Gemini rédige la note à partir des actualités et des indicateurs mis
+  en forme par Python (2 décimales), en adaptant sa longueur et ses points aux
+  données. Contrôle automatique : chaque nombre de la note doit figurer dans les
+  données ; sinon une seconde rédaction est demandée, puis la note est publiée avec
+  un avertissement listant les nombres non vérifiés. Sans aucune donnée, une note
+  minimale est produite sans LLM. La qualité factuelle des synthèses de l'Agent 1
+  reste dépendante des sources et du LLM.
 
 Les clôtures sont ajustées des dividendes et opérations sur titres. Le jour UTC
 courant est exclu. Le rendement `weekly_return_pct` vaut

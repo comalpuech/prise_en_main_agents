@@ -104,7 +104,7 @@ def test_prompt_defines_note_format_and_guardrails():
     assert "QUE les informations fournies" in SYSTEM_PROMPT
 
 
-# --- Nœud du graphe (contrat attendu, à implémenter) -------------------------
+# --- Nœud du graphe ----------------------------------------------------------
 
 NEWS = [
     NewsItem(
@@ -122,64 +122,84 @@ METRICS = MarketMetrics(
     sma_long=172.9,
     volatility_annualized=41.0,
 )
+STATE = {
+    "request": "Fais-moi un point sur Nvidia cette semaine",
+    "ticker": "NVDA",
+    "company": "Nvidia",
+    "lookback_days": 7,
+    "news": NEWS,
+    "metrics": METRICS,
+}
+GOOD_NOTE = (
+    "# NVDA : clôture à 191.75 sur 7 jours\n## Résumé\nLe cours varie de 5,13 %.\n"
+    "## Points clés\n- Résultats au-dessus des attentes (Reuters, 4 novembre 2026)."
+)
 
 
-def test_writer_agent_node_fills_only_report(monkeypatch):
-    model = spy_model('{"news_indices": [0]}')
+def test_writer_agent_publishes_llm_note(monkeypatch):
+    model = spy_model(GOOD_NOTE)
     monkeypatch.setattr(writer_module, "get_llm", lambda **_: model)
 
-    out = writer_agent(
-        {
-            "request": "Fais-moi un point sur Nvidia cette semaine",
-            "ticker": "NVDA",
-            "company": "Nvidia",
-            "lookback_days": 7,
-            "news": NEWS,
-            "metrics": METRICS,
-        }
+    out = writer_agent(STATE)
+
+    assert out == {"report": GOOD_NOTE}
+    # le LLM a reçu les faits et les chiffres de l'état, mis en forme
+    sent = model.seen[0][-1].content
+    assert "Nvidia beats estimates" in sent
+    assert "Résultats trimestriels au-dessus des attentes." in sent
+    assert '"Dernière clôture ajustée": "191.75"' in sent
+    assert '"Moyenne mobile 20 séances": "172.90"' in sent
+
+
+def test_writer_retries_once_when_numbers_are_invented(monkeypatch):
+    invented = "# NVDA\n## Résumé\nObjectif de cours : 250 $."
+    model = spy_model(invented, GOOD_NOTE)
+    monkeypatch.setattr(writer_module, "get_llm", lambda **_: model)
+
+    out = writer_agent(STATE)
+
+    assert out == {"report": GOOD_NOTE}
+    assert len(model.seen) == 2
+    feedback = model.seen[1][-1].content
+    assert "250" in feedback
+
+
+def test_writer_flags_numbers_still_unverified(monkeypatch):
+    invented = "# NVDA\n## Résumé\nObjectif de cours : 250 $."
+    monkeypatch.setattr(
+        writer_module, "get_llm", lambda **_: spy_model(invented, invented)
     )
 
-    assert set(out) == {"report"}
-    assert "Nvidia beats estimates" in out["report"]
-    assert "191.7500" in out["report"]
-    assert "41.0000" in out["report"]
-    # le LLM a bien reçu les faits et les chiffres de l'état
-    sent = model.seen[0][-1].content
-    assert "NVDA" in sent
-    assert "Nvidia beats estimates" in sent
-    assert "191.75" in sent
+    report = writer_agent(STATE)["report"]
+
+    assert report.startswith(invented)
+    assert "Contrôle automatique" in report
+    assert "250" in report.split("Contrôle automatique")[1]
 
 
-@pytest.mark.parametrize(
-    "reply",
-    [
-        NOTE,
-        '{"news_indices": [-1]}',
-        '{"news_indices": [99]}',
-        '{"news_indices": [true]}',
-        '{"news_indices": [0, 0]}',
-    ],
-)
-def test_writer_never_publishes_free_llm_text(monkeypatch, reply):
-    model = spy_model(reply)
+def test_writer_lists_missing_metrics_for_llm(monkeypatch):
+    model = spy_model("# NVDA\n## Résumé\nPeu de données.")
     monkeypatch.setattr(writer_module, "get_llm", lambda **_: model)
-    report = writer_agent({"ticker": "NVDA", "news": NEWS, "metrics": METRICS})[
-        "report"
-    ]
-    assert "191.7500" in report
-    assert NOTE not in report
-    assert "Tri LLM invalide" in report
+
+    writer_agent(
+        {"ticker": "NVDA", "news": NEWS, "metrics": {"sma_short": float("nan")}}
+    )
+
+    sent = model.seen[0][-1].content
+    assert '"indicateurs": {}' in sent
+    assert "Moyenne mobile 5 séances" in sent.split("indicateurs_indisponibles")[1]
+    assert "nan" not in sent.lower().split("indicateurs_indisponibles")[0]
 
 
 def test_writer_missing_data_needs_no_llm(monkeypatch):
     def forbidden(**kwargs):
-        raise AssertionError("Aucune sélection à demander")
+        raise AssertionError("Rien à rédiger")
 
     monkeypatch.setattr(writer_module, "get_llm", forbidden)
     report = writer_agent({"ticker": "NVDA", "news": [], "metrics": {}})["report"]
     assert "Aucune actualité" in report
     assert "Indicateurs indisponibles" in report
-    assert "SMA 20" in report
+    assert "Moyenne mobile 20 séances" in report
 
 
 def test_writer_error_keeps_cause(monkeypatch):
@@ -194,43 +214,30 @@ def test_writer_error_keeps_cause(monkeypatch):
     assert caught.value.__cause__ is error
 
 
-def test_writer_bounds_report_and_does_not_mutate_state(monkeypatch):
+def test_writer_empty_answers_raise(monkeypatch):
+    monkeypatch.setattr(writer_module, "get_llm", lambda **_: spy_model("", "  "))
+    with pytest.raises(RuntimeError, match="aucune note"):
+        writer_agent(STATE)
+
+
+def test_writer_strips_markdown_fence_and_keeps_state(monkeypatch):
     from copy import deepcopy
 
-    model = spy_model('{"news_indices": [0, 1, 2]}')
-    monkeypatch.setattr(writer_module, "get_llm", lambda **_: model)
-    state = {
-        "ticker": "NVDA",
-        "news": [dict(NEWS[0], summary="Fait fourni. " * 100)] * 4,
-        "metrics": METRICS,
-    }
-    before = deepcopy(state)
-    report = writer_agent(state)["report"]
-    assert state == before
-    assert len(report.split()) <= 350
-
-
-def test_writer_omits_nonfinite_metrics(monkeypatch):
-    monkeypatch.setattr(
-        writer_module, "get_llm", lambda **_: spy_model('{"news_indices": [0]}')
-    )
-    report = writer_agent(
-        {
-            "ticker": "NVDA",
-            "news": NEWS,
-            "metrics": {"last_close": float("nan"), "sma_short": float("inf")},
-        }
-    )["report"]
-    assert "Indicateurs indisponibles" in report
-    assert ": nan" not in report and ": inf" not in report
-
-
-def test_writer_accepts_json_fence(monkeypatch):
     monkeypatch.setattr(
         writer_module,
         "get_llm",
-        lambda **_: spy_model('```json\n{"news_indices": [0]}\n```'),
+        lambda **_: spy_model(f"```markdown\n{GOOD_NOTE}\n```"),
     )
-    report = writer_agent({"ticker": "NVDA", "news": NEWS})["report"]
-    assert "Nvidia beats estimates" in report
-    assert "Tri LLM invalide" not in report
+    before = deepcopy(STATE)
+    assert writer_agent(STATE)["report"] == GOOD_NOTE
+    assert STATE == before
+
+
+def test_numbers_are_normalized():
+    assert writer_module._numbers("04 novembre, 191,750 et 5.13 % ; 2026-11-04") == {
+        "4",
+        "191.75",
+        "5.13",
+        "2026",
+        "11",
+    }
