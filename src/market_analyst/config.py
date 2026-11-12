@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     llm_model: str = "google_genai:gemini-2.5-flash"  # "<provider>:<model>"
     google_model: str = ""
     default_lookback_days: int = 7
+    # Appels LLM : un pipeline en fait 6 à 8, une erreur 503 passagère ne doit pas
+    # tout arrêter. Les SDK réessaient avec un délai croissant.
+    llm_timeout_s: float = 30
+    llm_max_retries: int = 4
 
     @model_validator(mode="after")
     def resolve_google_model(self) -> "Settings":

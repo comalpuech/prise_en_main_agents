@@ -48,7 +48,7 @@ class ParsedRequest(BaseModel):
 @cache
 def build_request_parser() -> Runnable:
     """LLM à sortie structurée qui transforme la demande en `ParsedRequest`."""
-    return get_llm(timeout=30, max_retries=1).with_structured_output(ParsedRequest)
+    return get_llm().with_structured_output(ParsedRequest)
 
 
 def _interpret(request: str) -> ParsedRequest:

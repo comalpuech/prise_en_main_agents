@@ -7,7 +7,6 @@ from pathlib import Path
 
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, ToolMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph.state import CompiledStateGraph
 
 from market_analyst.config import get_settings
@@ -27,10 +26,6 @@ def build_market_data_agent() -> CompiledStateGraph:
     ):
         raise ValueError("GOOGLE_API_KEY absente : renseignez-la dans votre .env local")
     model = get_llm()
-    if isinstance(model, ChatGoogleGenerativeAI):
-        # Instance propre à cet agent ; la fabrique et les autres agents restent inchangés.
-        model.timeout = 30
-        model.max_retries = 1
     return create_agent(
         model,
         tools=[get_market_metrics],

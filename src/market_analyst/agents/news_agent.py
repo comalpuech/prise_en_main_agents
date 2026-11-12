@@ -41,7 +41,7 @@ class NewsDigest(BaseModel):
 def build_news_agent() -> CompiledStateGraph:
     """Agent ReAct : appelle `search_news`, puis renvoie un `NewsDigest` structuré."""
     return create_agent(
-        get_llm(timeout=30, max_retries=1),
+        get_llm(),
         tools=[search_news],
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
         response_format=NewsDigest,

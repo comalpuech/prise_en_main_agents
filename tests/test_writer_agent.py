@@ -43,7 +43,7 @@ def test_build_writer_uses_shared_llm_factory(monkeypatch):
 
     build_writer()
 
-    assert calls == [{"timeout": 30, "max_retries": 1}]
+    assert calls == [{}]  # délai et tentatives viennent de la config commune
 
 
 def test_get_llm_falls_back_to_default_model_without_env(monkeypatch, tmp_path):
@@ -61,15 +61,15 @@ def test_get_llm_falls_back_to_default_model_without_env(monkeypatch, tmp_path):
     monkeypatch.setattr(llm, "init_chat_model", fake_init_chat_model)
     config.get_settings.cache_clear()
     try:
-        llm.get_llm(timeout=30, max_retries=1)
+        llm.get_llm()
     finally:
         config.get_settings.cache_clear()
 
     assert received == {
         "model": config.Settings.model_fields["llm_model"].default,
         "temperature": 0.0,
-        "timeout": 30,
-        "max_retries": 1,
+        "timeout": config.Settings.model_fields["llm_timeout_s"].default,
+        "max_retries": config.Settings.model_fields["llm_max_retries"].default,
     }
 
 

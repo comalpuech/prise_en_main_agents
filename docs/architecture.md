@@ -37,7 +37,8 @@ configuration commune.
 
 Les trois agents passent par `get_llm` : `LLM_MODEL` explicite prime sur
 `GOOGLE_MODEL`, puis vient le défaut `google_genai:gemini-2.5-flash`.
-Les appels LLM sont bornés à 30 secondes par requête et une tentative ; un agent
+Les appels LLM sont bornés à 30 secondes par requête, avec jusqu'à 4 tentatives au total
+(`LLM_TIMEOUT_S`, `LLM_MAX_RETRIES`, appliqués par `get_llm` à tous les agents) ; un agent
 ReAct peut faire plusieurs requêtes. Une panne LLM arrête le pipeline. Les causes
 Python sont conservées ; la CLI affiche un message générique sans texte brut du SDK.
 

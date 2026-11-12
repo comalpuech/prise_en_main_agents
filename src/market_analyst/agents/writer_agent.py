@@ -41,7 +41,7 @@ def build_writer():
     Le modèle vient de `get_llm()` (LLM_MODEL du .env, sinon la valeur par défaut
     de config.py), comme pour les autres agents.
     """
-    model = get_llm(timeout=30, max_retries=1)
+    model = get_llm()
     return create_agent(model=model, tools=[], system_prompt=SYSTEM_PROMPT)
 
 

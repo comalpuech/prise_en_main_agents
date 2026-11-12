@@ -11,6 +11,10 @@ def get_llm(temperature: float = 0.0, **kwargs) -> BaseChatModel:
 
     Fournisseur par défaut : Google AI Studio (Gemini, offre gratuite), clé dans
     GOOGLE_API_KEY. Changer LLM_MODEL suffit pour basculer de fournisseur.
-    `kwargs` (timeout, max_retries…) est transmis tel quel à `init_chat_model`.
+    Délai et nombre de tentatives par défaut : LLM_TIMEOUT_S et LLM_MAX_RETRIES
+    (.env). `kwargs` est transmis tel quel à `init_chat_model` et les remplace.
     """
-    return init_chat_model(get_settings().llm_model, temperature=temperature, **kwargs)
+    settings = get_settings()
+    kwargs.setdefault("timeout", settings.llm_timeout_s)
+    kwargs.setdefault("max_retries", settings.llm_max_retries)
+    return init_chat_model(settings.llm_model, temperature=temperature, **kwargs)

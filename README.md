@@ -29,7 +29,8 @@ La priorité de configuration commune aux trois agents est :
 Choisir dans `.env` un modèle accessible à votre compte si le défaut renvoie 404.
 Les variables déjà exportées dans le processus priment sur `.env`. Redémarrer le
 processus après changement : les paramètres et certains agents sont mis en cache.
-Les appels LLM sont limités à 30 secondes par requête et une tentative.
+Les appels LLM sont limités à 30 secondes avec jusqu'à 4 tentatives au total en cas d'erreur
+fournisseur passagère (503, 429) ; réglable via `LLM_TIMEOUT_S` et `LLM_MAX_RETRIES`.
 
 ## Lancer le pipeline
 
